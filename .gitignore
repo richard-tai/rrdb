@@ -1,4 +1,8 @@
 
+# rdm
+compile_commands.json
+
+
 # robot test outptu
 /test/robot/*ml
 
