@@ -145,6 +145,14 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
+# librocksdb.a
+DEPENDENCY_TARGETS+= rocksdb
+ROCKSDB_LIBA=librocksdb.a
+ROCKSDB_PATH=../deps/rocksdb
+ROCKSDB_LIBA_PATH=${ROCKSDB_PATH}/librocksdb.a
+FINAL_LIBS := ${ROCKSDB_LIBA_PATH} $(FINAL_LIBS)
+FINAL_CFLAGS+= -I${ROCKSDB_PATH}/include -I${ROCKSDB_PATH}
+
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
