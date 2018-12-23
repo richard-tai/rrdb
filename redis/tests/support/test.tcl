@@ -1,8 +1,6 @@
 set ::num_tests 0
 set ::num_passed 0
 set ::num_failed 0
-set ::num_skipped 0
-set ::num_aborted 0
 set ::tests_failed {}
 
 proc fail {msg} {
@@ -70,24 +68,8 @@ proc test {name code {okpattern undefined}} {
     # abort if tagged with a tag to deny
     foreach tag $::denytags {
         if {[lsearch $::tags $tag] >= 0} {
-            incr ::num_aborted
-            send_data_packet $::test_server_fd ignore $name
             return
         }
-    }
-
-    # abort if test name in skiptests
-    if {[lsearch $::skiptests $name] >= 0} {
-        incr ::num_skipped
-        send_data_packet $::test_server_fd skip $name
-        return
-    }
-
-    # abort if test name in skiptests
-    if {[llength $::only_tests] > 0 && [lsearch $::only_tests $name] < 0} {
-        incr ::num_skipped
-        send_data_packet $::test_server_fd skip $name
-        return
     }
 
     # check if tagged with at least 1 tag to allow when there *is* a list
@@ -100,8 +82,6 @@ proc test {name code {okpattern undefined}} {
             }
         }
         if {$matched < 1} {
-            incr ::num_aborted
-            send_data_packet $::test_server_fd ignore $name
             return
         }
     }

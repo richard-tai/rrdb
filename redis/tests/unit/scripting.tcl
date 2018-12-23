@@ -148,11 +148,9 @@ start_server {tags {"scripting"}} {
 
     test {EVAL - Scripts can't run certain commands} {
         set e {}
-        r debug lua-always-replicate-commands 0
         catch {
             r eval "redis.pcall('randomkey'); return redis.pcall('set','x','ciao')" 0
         } e
-        r debug lua-always-replicate-commands 1
         set e
     } {*not allowed after*}
 
@@ -301,12 +299,9 @@ start_server {tags {"scripting"}} {
     } {b534286061d4b9e4026607613b95c06c06015ae8 loaded}
 
     test "In the context of Lua the output of random commands gets ordered" {
-        r debug lua-always-replicate-commands 0
         r del myset
         r sadd myset a b c d e f g h i l m n o p q r s t u v z aa aaa azz
-        set res [r eval {return redis.call('smembers',KEYS[1])} 1 myset]
-        r debug lua-always-replicate-commands 1
-        set res
+        r eval {return redis.call('smembers',KEYS[1])} 1 myset
     } {a aa aaa azz b c d e f g h i l m n o p q r s t u v z}
 
     test "SORT is normally not alpha re-ordered for the scripting engine" {
@@ -402,7 +397,6 @@ start_server {tags {"scripting"}} {
     test {EVAL processes writes from AOF in read-only slaves} {
         r flushall
         r config set appendonly yes
-        r config set aof-use-rdb-preamble no
         r eval {redis.call("set",KEYS[1],"100")} 1 foo
         r eval {redis.call("incr",KEYS[1])} 1 foo
         r eval {redis.call("incr",KEYS[1])} 1 foo
@@ -522,7 +516,7 @@ start_server {tags {"scripting"}} {
     # Note: keep this test at the end of this server stanza because it
     # kills the server.
     test {SHUTDOWN NOSAVE can kill a timedout script anyway} {
-        # The server could be still unresponding to normal commands.
+        # The server sould be still unresponding to normal commands.
         catch {r ping} e
         assert_match {BUSY*} $e
         catch {r shutdown nosave}
@@ -542,7 +536,7 @@ foreach cmdrepl {0 1} {
                 r debug lua-always-replicate-commands 1
             }
 
-            test "Before the replica connects we issue two EVAL commands $rt" {
+            test "Before the slave connects we issue two EVAL commands $rt" {
                 # One with an error, but still executing a command.
                 # SHA is: 67164fc43fa971f76fd1aaeeaf60c1c178d25876
                 catch {
@@ -553,13 +547,13 @@ foreach cmdrepl {0 1} {
                 r eval {return redis.call('incr',KEYS[1])} 1 x
             } {2}
 
-            test "Connect a replica to the master instance $rt" {
+            test "Connect a slave to the master instance $rt" {
                 r -1 slaveof [srv 0 host] [srv 0 port]
                 wait_for_condition 50 100 {
                     [s -1 role] eq {slave} &&
                     [string match {*master_link_status:up*} [r -1 info replication]]
                 } else {
-                    fail "Can't turn the instance into a replica"
+                    fail "Can't turn the instance into a slave"
                 }
             }
 
@@ -592,7 +586,7 @@ foreach cmdrepl {0 1} {
                 wait_for_condition 50 100 {
                     [r -1 lrange a 0 -1] eq [r lrange a 0 -1]
                 } else {
-                    fail "Expected list 'a' in replica and master to be the same, but they are respectively '[r -1 lrange a 0 -1]' and '[r lrange a 0 -1]'"
+                    fail "Expected list 'a' in slave and master to be the same, but they are respectively '[r -1 lrange a 0 -1]' and '[r lrange a 0 -1]'"
                 }
                 set res
             } {a 1}
@@ -627,7 +621,7 @@ foreach cmdrepl {0 1} {
                 wait_for_condition 50 100 {
                     [r -1 debug digest] eq [r debug digest]
                 } else {
-                    fail "Master-Replica desync after Lua script using SELECT."
+                    fail "Master-Slave desync after Lua script using SELECT."
                 }
             }
         }
@@ -635,14 +629,14 @@ foreach cmdrepl {0 1} {
 }
 
 start_server {tags {"scripting repl"}} {
-    start_server {overrides {appendonly yes aof-use-rdb-preamble no}} {
-        test "Connect a replica to the master instance" {
+    start_server {overrides {appendonly yes}} {
+        test "Connect a slave to the master instance" {
             r -1 slaveof [srv 0 host] [srv 0 port]
             wait_for_condition 50 100 {
                 [s -1 role] eq {slave} &&
                 [string match {*master_link_status:up*} [r -1 info replication]]
             } else {
-                fail "Can't turn the instance into a replica"
+                fail "Can't turn the instance into a slave"
             }
         }
 
@@ -660,13 +654,11 @@ start_server {tags {"scripting repl"}} {
         } {1}
 
         test "Redis.set_repl() must be issued after replicate_commands()" {
-            r debug lua-always-replicate-commands 0
             catch {
                 r eval {
                     redis.set_repl(redis.REPL_ALL);
                 } 0
             } e
-            r debug lua-always-replicate-commands 1
             set e
         } {*only after turning on*}
 
@@ -696,7 +688,7 @@ start_server {tags {"scripting repl"}} {
             wait_for_condition 50 100 {
                 [r -1 mget a b c d] eq {1 {} {} 4}
             } else {
-                fail "Only a and c should be replicated to replica"
+                fail "Only a and c should be replicated to slave"
             }
 
             # Master should have everything right now
@@ -735,7 +727,7 @@ start_server {tags {"scripting repl"}} {
             wait_for_condition 50 100 {
                 [r get time] eq [r -1 get time]
             } else {
-                fail "Time key does not match between master and replica"
+                fail "Time key does not match between master and slave"
             }
         }
     }

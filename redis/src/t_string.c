@@ -301,21 +301,23 @@ void mgetCommand(client *c) {
 }
 
 void msetGenericCommand(client *c, int nx) {
-    int j;
+    int j, busykeys = 0;
 
     if ((c->argc % 2) == 0) {
         addReplyError(c,"wrong number of arguments for MSET");
         return;
     }
-
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
-     * set anything if at least one key alerady exists. */
+     * set nothing at all if at least one already key exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
             if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {
-                addReply(c, shared.czero);
-                return;
+                busykeys++;
             }
+        }
+        if (busykeys) {
+            addReply(c, shared.czero);
+            return;
         }
     }
 
@@ -359,7 +361,7 @@ void incrDecrCommand(client *c, long long incr) {
         new = o;
         o->ptr = (void*)((long)value);
     } else {
-        new = createStringObjectFromLongLongForValue(value);
+        new = createStringObjectFromLongLong(value);
         if (o) {
             dbOverwrite(c->db,c->argv[1],new);
         } else {

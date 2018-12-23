@@ -39,8 +39,6 @@
 #include "sds.h"
 #include "sdsalloc.h"
 
-const char *SDS_NOINIT = "SDS_NOINIT";
-
 static inline int sdsHdrSize(char type) {
     switch(type&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
@@ -67,16 +65,13 @@ static inline char sdsReqType(size_t string_size) {
 #if (LONG_MAX == LLONG_MAX)
     if (string_size < 1ll<<32)
         return SDS_TYPE_32;
-    return SDS_TYPE_64;
-#else
-    return SDS_TYPE_32;
 #endif
+    return SDS_TYPE_64;
 }
 
 /* Create a new sds string with the content specified by the 'init' pointer
  * and 'initlen'.
  * If NULL is used for 'init' the string is initialized with zero bytes.
- * If SDS_NOINIT is used, the buffer is left uninitialized;
  *
  * The string is always null-termined (all the sds strings are, always) so
  * even if you create an sds string with:
@@ -97,9 +92,7 @@ sds sdsnewlen(const void *init, size_t initlen) {
     unsigned char *fp; /* flags pointer. */
 
     sh = s_malloc(hdrlen+initlen+1);
-    if (init==SDS_NOINIT)
-        init = NULL;
-    else if (!init)
+    if (!init)
         memset(sh, 0, hdrlen+initlen+1);
     if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen;
@@ -285,7 +278,7 @@ sds sdsRemoveFreeSpace(sds s) {
     return s;
 }
 
-/* Return the total size of the allocation of the specified sds string,
+/* Return the total size of the allocation of the specifed sds string,
  * including:
  * 1) The sds header before the pointer.
  * 2) The string.
@@ -695,7 +688,7 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
  * s = sdstrim(s,"Aa. :");
  * printf("%s\n", s);
  *
- * Output will be just "HelloWorld".
+ * Output will be just "Hello World".
  */
 sds sdstrim(sds s, const char *cset) {
     char *start, *end, *sp, *ep;

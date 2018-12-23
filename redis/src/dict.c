@@ -146,13 +146,13 @@ int dictResize(dict *d)
 /* Expand or create the hash table */
 int dictExpand(dict *d, unsigned long size)
 {
+    dictht n; /* the new hash table */
+    unsigned long realsize = _dictNextPower(size);
+
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hash table */
     if (dictIsRehashing(d) || d->ht[0].used > size)
         return DICT_ERR;
-
-    dictht n; /* the new hash table */
-    unsigned long realsize = _dictNextPower(size);
 
     /* Rehashing to the same table size is not useful. */
     if (realsize == d->ht[0].size) return DICT_ERR;
@@ -327,7 +327,7 @@ int dictReplace(dict *d, void *key, void *val)
     dictEntry *entry, *existing, auxentry;
 
     /* Try to add the element. If the key
-     * does not exists dictAdd will succeed. */
+     * does not exists dictAdd will suceed. */
     entry = dictAddRaw(d,key,&existing);
     if (entry) {
         dictSetVal(d, entry, val);
@@ -705,10 +705,8 @@ unsigned int dictGetSomeKeys(dict *d, dictEntry **des, unsigned int count) {
                  * table, there will be no elements in both tables up to
                  * the current rehashing index, so we jump if possible.
                  * (this happens when going from big to small table). */
-                if (i >= d->ht[1].size)
-                    i = d->rehashidx;
-                else
-                    continue;
+                if (i >= d->ht[1].size) i = d->rehashidx;
+                continue;
             }
             if (i >= d->ht[j].size) continue; /* Out of range for this table. */
             dictEntry *he = d->ht[j].table[i];

@@ -1,24 +1,28 @@
 #include "test/jemalloc_test.h"
 
 static unsigned
-get_nsizes_impl(const char *cmd) {
+get_nsizes_impl(const char *cmd)
+{
 	unsigned ret;
 	size_t z;
 
 	z = sizeof(unsigned);
-	assert_d_eq(mallctl(cmd, (void *)&ret, &z, NULL, 0), 0,
+	assert_d_eq(mallctl(cmd, &ret, &z, NULL, 0), 0,
 	    "Unexpected mallctl(\"%s\", ...) failure", cmd);
 
-	return ret;
+	return (ret);
 }
 
 static unsigned
-get_nlarge(void) {
-	return get_nsizes_impl("arenas.nlextents");
+get_nhuge(void)
+{
+
+	return (get_nsizes_impl("arenas.nhchunks"));
 }
 
 static size_t
-get_size_impl(const char *cmd, size_t ind) {
+get_size_impl(const char *cmd, size_t ind)
+{
 	size_t ret;
 	size_t z;
 	size_t mib[4];
@@ -29,92 +33,56 @@ get_size_impl(const char *cmd, size_t ind) {
 	    0, "Unexpected mallctlnametomib(\"%s\", ...) failure", cmd);
 	mib[2] = ind;
 	z = sizeof(size_t);
-	assert_d_eq(mallctlbymib(mib, miblen, (void *)&ret, &z, NULL, 0),
+	assert_d_eq(mallctlbymib(mib, miblen, &ret, &z, NULL, 0),
 	    0, "Unexpected mallctlbymib([\"%s\", %zu], ...) failure", cmd, ind);
 
-	return ret;
+	return (ret);
 }
 
 static size_t
-get_large_size(size_t ind) {
-	return get_size_impl("arenas.lextent.0.size", ind);
+get_huge_size(size_t ind)
+{
+
+	return (get_size_impl("arenas.hchunk.0.size", ind));
 }
 
-/*
- * On systems which can't merge extents, tests that call this function generate
- * a lot of dirty memory very quickly.  Purging between cycles mitigates
- * potential OOM on e.g. 32-bit Windows.
- */
-static void
-purge(void) {
-	assert_d_eq(mallctl("arena.0.purge", NULL, NULL, NULL, 0), 0,
-	    "Unexpected mallctl error");
-}
+TEST_BEGIN(test_oom)
+{
+	size_t hugemax, size, alignment;
 
-TEST_BEGIN(test_overflow) {
-	size_t largemax;
-
-	largemax = get_large_size(get_nlarge()-1);
-
-	assert_ptr_null(mallocx(largemax+1, 0),
-	    "Expected OOM for mallocx(size=%#zx, 0)", largemax+1);
-
-	assert_ptr_null(mallocx(ZU(PTRDIFF_MAX)+1, 0),
-	    "Expected OOM for mallocx(size=%#zx, 0)", ZU(PTRDIFF_MAX)+1);
-
-	assert_ptr_null(mallocx(SIZE_T_MAX, 0),
-	    "Expected OOM for mallocx(size=%#zx, 0)", SIZE_T_MAX);
-
-	assert_ptr_null(mallocx(1, MALLOCX_ALIGN(ZU(PTRDIFF_MAX)+1)),
-	    "Expected OOM for mallocx(size=1, MALLOCX_ALIGN(%#zx))",
-	    ZU(PTRDIFF_MAX)+1);
-}
-TEST_END
-
-TEST_BEGIN(test_oom) {
-	size_t largemax;
-	bool oom;
-	void *ptrs[3];
-	unsigned i;
+	hugemax = get_huge_size(get_nhuge()-1);
 
 	/*
-	 * It should be impossible to allocate three objects that each consume
-	 * nearly half the virtual address space.
+	 * It should be impossible to allocate two objects that each consume
+	 * more than half the virtual address space.
 	 */
-	largemax = get_large_size(get_nlarge()-1);
-	oom = false;
-	for (i = 0; i < sizeof(ptrs) / sizeof(void *); i++) {
-		ptrs[i] = mallocx(largemax, 0);
-		if (ptrs[i] == NULL) {
-			oom = true;
+	{
+		void *p;
+
+		p = mallocx(hugemax, 0);
+		if (p != NULL) {
+			assert_ptr_null(mallocx(hugemax, 0),
+			    "Expected OOM for mallocx(size=%#zx, 0)", hugemax);
+			dallocx(p, 0);
 		}
 	}
-	assert_true(oom,
-	    "Expected OOM during series of calls to mallocx(size=%zu, 0)",
-	    largemax);
-	for (i = 0; i < sizeof(ptrs) / sizeof(void *); i++) {
-		if (ptrs[i] != NULL) {
-			dallocx(ptrs[i], 0);
-		}
-	}
-	purge();
 
 #if LG_SIZEOF_PTR == 3
-	assert_ptr_null(mallocx(0x8000000000000000ULL,
-	    MALLOCX_ALIGN(0x8000000000000000ULL)),
-	    "Expected OOM for mallocx()");
-	assert_ptr_null(mallocx(0x8000000000000000ULL,
-	    MALLOCX_ALIGN(0x80000000)),
-	    "Expected OOM for mallocx()");
+	size      = ZU(0x8000000000000000);
+	alignment = ZU(0x8000000000000000);
 #else
-	assert_ptr_null(mallocx(0x80000000UL, MALLOCX_ALIGN(0x80000000UL)),
-	    "Expected OOM for mallocx()");
+	size      = ZU(0x80000000);
+	alignment = ZU(0x80000000);
 #endif
+	assert_ptr_null(mallocx(size, MALLOCX_ALIGN(alignment)),
+	    "Expected OOM for mallocx(size=%#zx, MALLOCX_ALIGN(%#zx)", size,
+	    alignment);
 }
 TEST_END
 
-TEST_BEGIN(test_basic) {
-#define MAXSZ (((size_t)1) << 23)
+TEST_BEGIN(test_basic)
+{
+#define	MAXSZ (((size_t)1) << 26)
 	size_t sz;
 
 	for (sz = 1; sz < MAXSZ; sz = nallocx(sz, 0) + 1) {
@@ -123,51 +91,38 @@ TEST_BEGIN(test_basic) {
 		nsz = nallocx(sz, 0);
 		assert_zu_ne(nsz, 0, "Unexpected nallocx() error");
 		p = mallocx(sz, 0);
-		assert_ptr_not_null(p,
-		    "Unexpected mallocx(size=%zx, flags=0) error", sz);
+		assert_ptr_not_null(p, "Unexpected mallocx() error");
 		rsz = sallocx(p, 0);
 		assert_zu_ge(rsz, sz, "Real size smaller than expected");
 		assert_zu_eq(nsz, rsz, "nallocx()/sallocx() size mismatch");
 		dallocx(p, 0);
 
 		p = mallocx(sz, 0);
-		assert_ptr_not_null(p,
-		    "Unexpected mallocx(size=%zx, flags=0) error", sz);
+		assert_ptr_not_null(p, "Unexpected mallocx() error");
 		dallocx(p, 0);
 
 		nsz = nallocx(sz, MALLOCX_ZERO);
 		assert_zu_ne(nsz, 0, "Unexpected nallocx() error");
 		p = mallocx(sz, MALLOCX_ZERO);
-		assert_ptr_not_null(p,
-		    "Unexpected mallocx(size=%zx, flags=MALLOCX_ZERO) error",
-		    nsz);
+		assert_ptr_not_null(p, "Unexpected mallocx() error");
 		rsz = sallocx(p, 0);
 		assert_zu_eq(nsz, rsz, "nallocx()/sallocx() rsize mismatch");
 		dallocx(p, 0);
-		purge();
 	}
 #undef MAXSZ
 }
 TEST_END
 
-TEST_BEGIN(test_alignment_and_size) {
-	const char *percpu_arena;
-	size_t sz = sizeof(percpu_arena);
-
-	if(mallctl("opt.percpu_arena", (void *)&percpu_arena, &sz, NULL, 0) ||
-	    strcmp(percpu_arena, "disabled") != 0) {
-		test_skip("test_alignment_and_size skipped: "
-		    "not working with percpu arena.");
-	};
-#define MAXALIGN (((size_t)1) << 23)
-#define NITER 4
-	size_t nsz, rsz, alignment, total;
+TEST_BEGIN(test_alignment_and_size)
+{
+#define	MAXALIGN (((size_t)1) << 25)
+#define	NITER 4
+	size_t nsz, rsz, sz, alignment, total;
 	unsigned i;
 	void *ps[NITER];
 
-	for (i = 0; i < NITER; i++) {
+	for (i = 0; i < NITER; i++)
 		ps[i] = NULL;
-	}
 
 	for (alignment = 8;
 	    alignment <= MAXALIGN;
@@ -200,9 +155,8 @@ TEST_BEGIN(test_alignment_and_size) {
 				    " alignment=%zu, size=%zu", ps[i],
 				    alignment, sz);
 				total += rsz;
-				if (total >= (MAXALIGN << 1)) {
+				if (total >= (MAXALIGN << 1))
 					break;
-				}
 			}
 			for (i = 0; i < NITER; i++) {
 				if (ps[i] != NULL) {
@@ -211,7 +165,6 @@ TEST_BEGIN(test_alignment_and_size) {
 				}
 			}
 		}
-		purge();
 	}
 #undef MAXALIGN
 #undef NITER
@@ -219,10 +172,11 @@ TEST_BEGIN(test_alignment_and_size) {
 TEST_END
 
 int
-main(void) {
-	return test(
-	    test_overflow,
+main(void)
+{
+
+	return (test(
 	    test_oom,
 	    test_basic,
-	    test_alignment_and_size);
+	    test_alignment_and_size));
 }

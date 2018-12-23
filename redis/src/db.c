@@ -38,8 +38,6 @@
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
-int keyIsExpired(redisDb *db, robj *key);
-
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
  * Then logarithmically increment the counter, and update the access time. */
@@ -92,7 +90,7 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
  *  LOOKUP_NONE (or zero): no special flags are passed.
  *  LOOKUP_NOTOUCH: don't alter the last access time of the key.
  *
- * Note: this function also returns NULL if the key is logically expired
+ * Note: this function also returns NULL is the key is logically expired
  * but still existing, in case this is a slave, since this API is called only
  * for read operations. Even if the key expiry is master-driven, we can
  * correctly report a key is expired on slaves even if the master is lagging
@@ -104,10 +102,7 @@ robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
         /* Key expired. If we are in the context of a master, expireIfNeeded()
          * returns 0 only when the key does not exist at all, so it's safe
          * to return NULL ASAP. */
-        if (server.masterhost == NULL) {
-            server.stat_keyspace_misses++;
-            return NULL;
-        }
+        if (server.masterhost == NULL) return NULL;
 
         /* However if we are in the context of a slave, expireIfNeeded() will
          * not really try to expire the key, it only returns information
@@ -118,7 +113,7 @@ robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
          * safety measure, the command invoked is a read-only command, we can
          * safely return NULL here, and provide a more consistent behavior
          * to clients accessign expired values in a read-only fashion, that
-         * will say the key as non existing.
+         * will say the key as non exisitng.
          *
          * Notably this covers GETs when slaves are used to scale reads. */
         if (server.current_client &&
@@ -126,7 +121,6 @@ robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
             server.current_client->cmd &&
             server.current_client->cmd->flags & CMD_READONLY)
         {
-            server.stat_keyspace_misses++;
             return NULL;
         }
     }
@@ -175,11 +169,9 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
     int retval = dictAdd(db->dict, copy, val);
 
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
-    if (val->type == OBJ_LIST ||
-        val->type == OBJ_ZSET)
-        signalKeyAsReady(db, key);
+    if (val->type == OBJ_LIST) signalListAsReady(db, key);
     if (server.cluster_enabled) slotToKeyAdd(key);
-}
+ }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
  * count of the new value is up to the caller.
@@ -190,19 +182,17 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->dict,key->ptr);
 
     serverAssertWithInfo(NULL,key,de != NULL);
-    dictEntry auxentry = *de;
-    robj *old = dictGetVal(de);
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        val->lru = old->lru;
+        robj *old = dictGetVal(de);
+        int saved_lru = old->lru;
+        dictReplace(db->dict, key->ptr, val);
+        val->lru = saved_lru;
+        /* LFU should be not only copied but also updated
+         * when a key is overwritten. */
+        updateLFU(val);
+    } else {
+        dictReplace(db->dict, key->ptr, val);
     }
-    dictSetVal(db->dict, de, val);
-
-    if (server.lazyfree_lazy_server_del) {
-        freeObjAsync(old);
-        dictSetVal(db->dict, &auxentry, NULL);
-    }
-
-    dictFreeVal(db->dict, &auxentry);
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -212,7 +202,7 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
  * 2) clients WATCHing for the destination key notified.
  * 3) The expire time of the key is reset (the key is made persistent).
  *
- * All the new keys in the database should be created via this interface. */
+ * All the new keys in the database should be craeted via this interface. */
 void setKey(redisDb *db, robj *key, robj *val) {
     if (lookupKeyWrite(db,key) == NULL) {
         dbAdd(db,key,val);
@@ -329,7 +319,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
  * If callback is given the function is called from time to time to
  * signal that work is in progress.
  *
- * The dbnum can be -1 if all the DBs should be flushed, or the specified
+ * The dbnum can be -1 if all teh DBs should be flushed, or the specified
  * DB number if we want to flush only a single Redis database number.
  *
  * Flags are be EMPTYDB_NO_FLAGS if no special flags are specified or
@@ -340,7 +330,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
  * database(s). Otherwise -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
 long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
-    int async = (flags & EMPTYDB_ASYNC);
+    int j, async = (flags & EMPTYDB_ASYNC);
     long long removed = 0;
 
     if (dbnum < -1 || dbnum >= server.dbnum) {
@@ -348,15 +338,8 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
         return -1;
     }
 
-    int startdb, enddb;
-    if (dbnum == -1) {
-        startdb = 0;
-        enddb = server.dbnum-1;
-    } else {
-        startdb = enddb = dbnum;
-    }
-
-    for (int j = startdb; j <= enddb; j++) {
+    for (j = 0; j < server.dbnum; j++) {
+        if (dbnum != -1 && dbnum != j) continue;
         removed += dictSize(server.db[j].dict);
         if (async) {
             emptyDbAsync(&server.db[j]);
@@ -549,7 +532,7 @@ void keysCommand(client *c) {
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
             keyobj = createStringObject(key,sdslen(key));
-            if (!keyIsExpired(c->db,keyobj)) {
+            if (expireIfNeeded(c->db,keyobj) == 0) {
                 addReplyBulk(c,keyobj);
                 numkeys++;
             }
@@ -827,7 +810,6 @@ void typeCommand(client *c) {
         case OBJ_SET: type = "set"; break;
         case OBJ_ZSET: type = "zset"; break;
         case OBJ_HASH: type = "hash"; break;
-        case OBJ_STREAM: type = "stream"; break;
         case OBJ_MODULE: {
             moduleValue *mv = o->ptr;
             type = mv->type->name;
@@ -972,19 +954,17 @@ void moveCommand(client *c) {
 }
 
 /* Helper function for dbSwapDatabases(): scans the list of keys that have
- * one or more blocked clients for B[LR]POP or other blocking commands
- * and signal the keys as ready if they are of the right type. See the comment
- * where the function is used for more info. */
+ * one or more blocked clients for B[LR]POP or other list blocking commands
+ * and signal the keys are ready if they are lists. See the comment where
+ * the function is used for more info. */
 void scanDatabaseForReadyLists(redisDb *db) {
     dictEntry *de;
     dictIterator *di = dictGetSafeIterator(db->blocking_keys);
     while((de = dictNext(di)) != NULL) {
         robj *key = dictGetKey(de);
         robj *value = lookupKey(db,key,LOOKUP_NOTOUCH);
-        if (value && (value->type == OBJ_LIST ||
-                      value->type == OBJ_STREAM ||
-                      value->type == OBJ_ZSET))
-            signalKeyAsReady(db, key);
+        if (value && value->type == OBJ_LIST)
+            signalListAsReady(db, key);
     }
     dictReleaseIterator(di);
 }
@@ -1126,25 +1106,6 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
     decrRefCount(argv[1]);
 }
 
-/* Check if the key is expired. */
-int keyIsExpired(redisDb *db, robj *key) {
-    mstime_t when = getExpire(db,key);
-
-    if (when < 0) return 0; /* No expire for this key */
-
-    /* Don't expire anything while loading. It will be done later. */
-    if (server.loading) return 0;
-
-    /* If we are in the context of a Lua script, we pretend that time is
-     * blocked to when the Lua script started. This way a key can expire
-     * only the first time it is accessed and not in the middle of the
-     * script execution, making propagation to slaves / AOF consistent.
-     * See issue #1525 on Github for more information. */
-    mstime_t now = server.lua_caller ? server.lua_time_start : mstime();
-
-    return now > when;
-}
-
 /* This function is called when we are going to perform some operation
  * in a given key, but such key may be already logically expired even if
  * it still exists in the database. The main way this function is called
@@ -1165,17 +1126,32 @@ int keyIsExpired(redisDb *db, robj *key) {
  * The return value of the function is 0 if the key is still valid,
  * otherwise the function returns 1 if the key is expired. */
 int expireIfNeeded(redisDb *db, robj *key) {
-    if (!keyIsExpired(db,key)) return 0;
+    mstime_t when = getExpire(db,key);
+    mstime_t now;
 
-    /* If we are running in the context of a slave, instead of
-     * evicting the expired key from the database, we return ASAP:
+    if (when < 0) return 0; /* No expire for this key */
+
+    /* Don't expire anything while loading. It will be done later. */
+    if (server.loading) return 0;
+
+    /* If we are in the context of a Lua script, we pretend that time is
+     * blocked to when the Lua script started. This way a key can expire
+     * only the first time it is accessed and not in the middle of the
+     * script execution, making propagation to slaves / AOF consistent.
+     * See issue #1525 on Github for more information. */
+    now = server.lua_caller ? server.lua_time_start : mstime();
+
+    /* If we are running in the context of a slave, return ASAP:
      * the slave key expiration is controlled by the master that will
      * send us synthesized DEL operations for expired keys.
      *
      * Still we try to return the right information to the caller,
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
-    if (server.masterhost != NULL) return 1;
+    if (server.masterhost != NULL) return now > when;
+
+    /* Return when this key has not expired */
+    if (now <= when) return 0;
 
     /* Delete the key */
     server.stat_expiredkeys++;
@@ -1207,7 +1183,7 @@ int *getKeysUsingCommandTable(struct redisCommand *cmd,robj **argv, int argc, in
     for (j = cmd->firstkey; j <= last; j += cmd->keystep) {
         if (j >= argc) {
             /* Modules commands, and standard commands with a not fixed number
-             * of arguments (negative arity parameter) do not have dispatch
+             * of arugments (negative arity parameter) do not have dispatch
              * time arity checks, so we need to handle the case where the user
              * passed an invalid number of arguments here. In this case we
              * return no keys and expect the command implementation to report
@@ -1262,7 +1238,7 @@ int *zunionInterGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *nu
     num = atoi(argv[2]->ptr);
     /* Sanity check. Don't return any key if the command is going to
      * reply with syntax error. */
-    if (num < 1 || num > (argc-3)) {
+    if (num > (argc-3)) {
         *numkeys = 0;
         return NULL;
     }
@@ -1291,7 +1267,7 @@ int *evalGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) 
     num = atoi(argv[2]->ptr);
     /* Sanity check. Don't return any key if the command is going to
      * reply with syntax error. */
-    if (num <= 0 || num > (argc-3)) {
+    if (num > (argc-3)) {
         *numkeys = 0;
         return NULL;
     }
@@ -1394,7 +1370,7 @@ int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numk
     for (i = 5; i < argc; i++) {
         char *arg = argv[i]->ptr;
         /* For the case when user specifies both "store" and "storedist" options, the
-         * second key specified would override the first key. This behavior is kept
+         * second key specified would override the first key. This behavior is kept 
          * the same as in georadiusCommand method.
          */
         if ((!strcasecmp(arg, "store") || !strcasecmp(arg, "storedist")) && ((i+1) < argc)) {
@@ -1415,51 +1391,7 @@ int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numk
     if(num > 1) {
          keys[1] = stored_key;
     }
-    *numkeys = num;
-    return keys;
-}
-
-/* XREAD [BLOCK <milliseconds>] [COUNT <count>] [GROUP <groupname> <ttl>]
- *       STREAMS key_1 key_2 ... key_N ID_1 ID_2 ... ID_N */
-int *xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys) {
-    int i, num = 0, *keys;
-    UNUSED(cmd);
-
-    /* We need to parse the options of the command in order to seek the first
-     * "STREAMS" string which is actually the option. This is needed because
-     * "STREAMS" could also be the name of the consumer group and even the
-     * name of the stream key. */
-    int streams_pos = -1;
-    for (i = 1; i < argc; i++) {
-        char *arg = argv[i]->ptr;
-        if (!strcasecmp(arg, "block")) {
-            i++; /* Skip option argument. */
-        } else if (!strcasecmp(arg, "count")) {
-            i++; /* Skip option argument. */
-        } else if (!strcasecmp(arg, "group")) {
-            i += 2; /* Skip option argument. */
-        } else if (!strcasecmp(arg, "noack")) {
-            /* Nothing to do. */
-        } else if (!strcasecmp(arg, "streams")) {
-            streams_pos = i;
-            break;
-        } else {
-            break; /* Syntax error. */
-        }
-    }
-    if (streams_pos != -1) num = argc - streams_pos - 1;
-
-    /* Syntax error. */
-    if (streams_pos == -1 || num == 0 || num % 2 != 0) {
-        *numkeys = 0;
-        return NULL;
-    }
-    num /= 2; /* We have half the keys as there are arguments because
-                 there are also the IDs, one per key. */
-
-    keys = zmalloc(sizeof(int) * num);
-    for (i = streams_pos+1; i < argc-num; i++) keys[i-streams_pos-1] = i;
-    *numkeys = num;
+    *numkeys = num; 
     return keys;
 }
 

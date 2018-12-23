@@ -64,7 +64,7 @@ start_server {tags {"aofrw"}} {
     }
 }
 
-start_server {tags {"aofrw"} overrides {aof-use-rdb-preamble no}} {
+start_server {tags {"aofrw"}} {
     test {Turning off AOF kills the background writing child if any} {
         r config set appendonly yes
         waitForBgrewriteaof r

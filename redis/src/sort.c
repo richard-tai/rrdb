@@ -193,7 +193,7 @@ void sortCommand(client *c) {
     long limit_start = 0, limit_count = -1, start, end;
     int j, dontsort = 0, vectorlen;
     int getop = 0; /* GET operation counter */
-    int int_conversion_error = 0;
+    int int_convertion_error = 0;
     int syntax_error = 0;
     robj *sortval, *sortby = NULL, *storekey = NULL;
     redisSortObject *vector; /* Resulting vector to sort */
@@ -447,7 +447,7 @@ void sortCommand(client *c) {
     serverAssertWithInfo(c,sortval,j == vectorlen);
 
     /* Now it's time to load the right scores in the sorting vector */
-    if (!dontsort) {
+    if (dontsort == 0) {
         for (j = 0; j < vectorlen; j++) {
             robj *byval;
             if (sortby) {
@@ -469,7 +469,7 @@ void sortCommand(client *c) {
                     if (eptr[0] != '\0' || errno == ERANGE ||
                         isnan(vector[j].u.score))
                     {
-                        int_conversion_error = 1;
+                        int_convertion_error = 1;
                     }
                 } else if (byval->encoding == OBJ_ENCODING_INT) {
                     /* Don't need to decode the object if it's
@@ -487,7 +487,9 @@ void sortCommand(client *c) {
                 decrRefCount(byval);
             }
         }
+    }
 
+    if (dontsort == 0) {
         server.sort_desc = desc;
         server.sort_alpha = alpha;
         server.sort_bypattern = sortby ? 1 : 0;
@@ -501,7 +503,7 @@ void sortCommand(client *c) {
     /* Send command output to the output buffer, performing the specified
      * GET/DEL/INCR/DECR operations if any. */
     outputlen = getop ? getop*(end-start+1) : end-start+1;
-    if (int_conversion_error) {
+    if (int_convertion_error) {
         addReplyError(c,"One or more scores can't be converted into double");
     } else if (storekey == NULL) {
         /* STORE option not specified, sent the sorting result to client */

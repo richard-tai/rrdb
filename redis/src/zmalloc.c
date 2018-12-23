@@ -30,7 +30,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 
 /* This function provide us access to the original libc free(). This is useful
  * for instance to free results obtained by backtrace_symbols(). We need
@@ -164,8 +163,8 @@ void *zrealloc(void *ptr, size_t size) {
     if (!newptr) zmalloc_oom_handler(size);
 
     *((size_t*)newptr) = size;
-    update_zmalloc_stat_free(oldsize+PREFIX_SIZE);
-    update_zmalloc_stat_alloc(size+PREFIX_SIZE);
+    update_zmalloc_stat_free(oldsize);
+    update_zmalloc_stat_alloc(size);
     return (char*)newptr+PREFIX_SIZE;
 #endif
 }
@@ -181,9 +180,6 @@ size_t zmalloc_size(void *ptr) {
      * the underlying allocator. */
     if (size&(sizeof(long)-1)) size += sizeof(long)-(size&(sizeof(long)-1));
     return size+PREFIX_SIZE;
-}
-size_t zmalloc_usable(void *ptr) {
-    return zmalloc_size(ptr)-PREFIX_SIZE;
 }
 #endif
 
@@ -301,36 +297,10 @@ size_t zmalloc_get_rss(void) {
 }
 #endif
 
-#if defined(USE_JEMALLOC)
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident) {
-    uint64_t epoch = 1;
-    size_t sz;
-    *allocated = *resident = *active = 0;
-    /* Update the statistics cached by mallctl. */
-    sz = sizeof(epoch);
-    je_mallctl("epoch", &epoch, &sz, &epoch, sz);
-    sz = sizeof(size_t);
-    /* Unlike RSS, this does not include RSS from shared libraries and other non
-     * heap mappings. */
-    je_mallctl("stats.resident", resident, &sz, NULL, 0);
-    /* Unlike resident, this doesn't not include the pages jemalloc reserves
-     * for re-use (purge will clean that). */
-    je_mallctl("stats.active", active, &sz, NULL, 0);
-    /* Unlike zmalloc_used_memory, this matches the stats.resident by taking
-     * into account all allocations done by this process (not only zmalloc). */
-    je_mallctl("stats.allocated", allocated, &sz, NULL, 0);
-    return 1;
+/* Fragmentation = RSS / allocated-bytes */
+float zmalloc_get_fragmentation_ratio(size_t rss) {
+    return (float)rss/zmalloc_used_memory();
 }
-#else
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident) {
-    *allocated = *resident = *active = 0;
-    return 1;
-}
-#endif
 
 /* Get the sum of the specified field (converted form kb to bytes) in
  * /proc/self/smaps. The field must be specified with trailing ":" as it
@@ -383,7 +353,7 @@ size_t zmalloc_get_private_dirty(long pid) {
 }
 
 /* Returns the size of physical memory (RAM) in bytes.
- * It looks ugly, but this is the cleanest way to achieve cross platform results.
+ * It looks ugly, but this is the cleanest way to achive cross platform results.
  * Cleaned up from:
  *
  * http://nadeausoftware.com/articles/2012/09/c_c_tip_how_get_physical_memory_size_system
@@ -422,7 +392,7 @@ size_t zmalloc_get_memory_size(void) {
     mib[0] = CTL_HW;
 #if defined(HW_REALMEM)
     mib[1] = HW_REALMEM;        /* FreeBSD. ----------------- */
-#elif defined(HW_PHYSMEM)
+#elif defined(HW_PYSMEM)
     mib[1] = HW_PHYSMEM;        /* Others. ------------------ */
 #endif
     unsigned int size = 0;      /* 32-bit */
@@ -438,20 +408,4 @@ size_t zmalloc_get_memory_size(void) {
 #endif
 }
 
-#ifdef REDIS_TEST
-#define UNUSED(x) ((void)(x))
-int zmalloc_test(int argc, char **argv) {
-    void *ptr;
 
-    UNUSED(argc);
-    UNUSED(argv);
-    printf("Initial used memory: %zu\n", zmalloc_used_memory());
-    ptr = zmalloc(123);
-    printf("Allocated 123 bytes; used: %zu\n", zmalloc_used_memory());
-    ptr = zrealloc(ptr, 456);
-    printf("Reallocated to 456 bytes; used: %zu\n", zmalloc_used_memory());
-    zfree(ptr);
-    printf("Freed pointer; used: %zu\n", zmalloc_used_memory());
-    return 0;
-}
-#endif
